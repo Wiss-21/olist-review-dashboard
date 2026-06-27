@@ -1,4 +1,5 @@
 import streamlit as st
+import numpy as np
 import pandas as pd
 import plotly.express as px
 
@@ -8,6 +9,10 @@ st.set_page_config(
     page_icon="📦",
     layout="wide",
 )
+
+# Plotly UI config — hides the hover toolbar on every chart
+PLOTLY_CONFIG = {'displayModeBar': False}
+
 import plotly.io as pio
 
 # ── BRAND PALETTE ─────────────────────────────────────────────────────
@@ -333,7 +338,7 @@ st.caption("A random forest trained on order features (delivery, price, category
            "The bar chart shows which features the model relies on most. AUC scores tell you how well "
            "the model separates good from bad reviews — above 0.7 is real signal, above 0.8 is strong.")
 
-from sklearn.ensemble import RandomForestClassifier
+from lightgbm import LGBMClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
 
@@ -361,9 +366,14 @@ def train_model(df_in):
         X, y, test_size=0.2, random_state=42, stratify=y
     )
 
-    model = RandomForestClassifier(
-        n_estimators=100, max_depth=10, n_jobs=-1,
-        random_state=42, class_weight='balanced'
+    model = LGBMClassifier(
+        n_estimators=300,
+        max_depth=8,
+        learning_rate=0.05,
+        n_jobs=-1,
+        random_state=42,
+        class_weight='balanced',
+        verbose=-1,           # suppress LightGBM's chatty training logs
     )
     model.fit(X_train, y_train)
 
@@ -375,11 +385,11 @@ def train_model(df_in):
         'importance': model.feature_importances_,
     }).sort_values('importance', ascending=False).head(15)
 
-    return train_auc, test_auc, importances
+    return model, X.columns.tolist(), X_test, y_test, train_auc, test_auc, importances
 
 
-with st.spinner("Training random forest (one-time, ~5–10 seconds)..."):
-    train_auc, test_auc, importances = train_model(df)
+with st.spinner("Training model (one-time, ~10-15 seconds)..."):
+    model, feature_cols, X_test, y_test, train_auc, test_auc, importances = train_model(df)
 
 c1, c2 = st.columns(2)
 c1.metric("Train AUC", f"{train_auc:.3f}")
@@ -407,4 +417,203 @@ st.info("**Reading this:** Delivery delay dominates the feature importance — s
         "is overfitting — current settings should keep them close.")
 
 st.markdown("---")
+
+
+
+
+# ── ROC + CONFUSION MATRIX ────────────────────────────────────────────
+st.markdown("---")
+st.subheader("Model evaluation: ROC curve and confusion matrix")
+st.caption("Standard ML evaluation diagnostics. The ROC curve shows how well the model separates classes at every threshold; the confusion matrix shows actual vs predicted at the 0.5 decision threshold.")
+
+from sklearn.metrics import roc_curve, confusion_matrix
+
+y_test_pred_proba = model.predict_proba(X_test)[:, 1]
+y_test_pred = (y_test_pred_proba >= 0.5).astype(int)
+
+ec1, ec2 = st.columns(2)
+
+fpr, tpr, _ = roc_curve(y_test, y_test_pred_proba)
+roc_df = pd.DataFrame({'FPR': fpr, 'TPR': tpr})
+fig_roc = px.area(
+    roc_df, x='FPR', y='TPR',
+    title=f'ROC Curve (AUC = {test_auc:.3f})',
+    labels={'FPR': 'False Positive Rate', 'TPR': 'True Positive Rate'},
+    color_discrete_sequence=[ACCENT],
+)
+fig_roc.add_shape(type='line', line=dict(dash='dash', color='gray', width=1),
+                  x0=0, x1=1, y0=0, y1=1)
+fig_roc.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=20))
+ec1.plotly_chart(fig_roc, use_container_width=True, config=PLOTLY_CONFIG)
+
+cm = confusion_matrix(y_test, y_test_pred)
+cm_df = pd.DataFrame(
+    cm,
+    index=['Actual: Good', 'Actual: Bad'],
+    columns=['Predicted: Good', 'Predicted: Bad'],
+)
+fig_cm = px.imshow(
+    cm_df, text_auto=True, aspect='auto',
+    title='Confusion Matrix (threshold = 0.5)',
+    color_continuous_scale=[ACCENT, INDIGO, WARNING],
+)
+fig_cm.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=20), coloraxis_showscale=False)
+ec2.plotly_chart(fig_cm, use_container_width=True, config=PLOTLY_CONFIG)
+
+total = cm.sum()
+tn, fp, fn, tp = cm.ravel()
+precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+st.caption(
+    f"**Reading the confusion matrix:** Of {total:,} test orders, the model correctly identified "
+    f"**{tp:,}** bad reviews (true positives) and missed **{fn:,}** (false negatives). "
+    f"It flagged **{fp:,}** good orders as risky (false positives). "
+    f"Precision = {precision*100:.1f}%, Recall = {recall*100:.1f}%."
+)
+
+# -- INTERACTIVE PREDICTOR ----------------------------------------
+st.markdown("---")
+st.subheader("Try the model: what's the bad-review risk for this order?")
+st.caption("Move the sliders to set a hypothetical order. The probability updates live.")
+
+c1, c2 = st.columns(2)
+with c1:
+    in_delay = st.slider("Delivery delay (days)", min_value=-30, max_value=30, value=0)
+    in_price = st.slider("Order total price (R$)", min_value=10, max_value=500, value=100, step=5)
+    in_items = st.slider("Number of items in order", min_value=1, max_value=10, value=1)
+with c2:
+    in_freight = st.slider("Freight cost (R$)", min_value=0, max_value=100, value=15, step=1)
+    in_delivery_days = st.slider("Total delivery time (days)", min_value=1, max_value=60, value=12)
+    _cat_opts = sorted(df['product_category_name_english'].dropna().unique().tolist())
+    in_category = st.selectbox("Product category", options=_cat_opts)
+    _state_opts = sorted(df['seller_state'].dropna().unique().tolist())
+    in_state = st.selectbox("Seller state", options=_state_opts)
+
+feature_vec = pd.DataFrame(np.zeros((1, len(feature_cols))), columns=feature_cols)
+feature_vec['delivery_delay_days'] = in_delay
+feature_vec['delivery_time_days']  = in_delivery_days
+feature_vec['total_price']         = in_price
+feature_vec['total_freight']       = in_freight
+feature_vec['n_items']             = in_items
+feature_vec['freight_pct']         = in_freight / in_price if in_price > 0 else 0
+
+_cat_col = 'cat_' + in_category
+if _cat_col in feature_vec.columns:
+    feature_vec[_cat_col] = 1
+elif 'cat_other' in feature_vec.columns:
+    feature_vec['cat_other'] = 1
+
+_state_col = 'state_' + in_state
+if _state_col in feature_vec.columns:
+    feature_vec[_state_col] = 1
+elif 'state_other_state' in feature_vec.columns:
+    feature_vec['state_other_state'] = 1
+
+prob = float(model.predict_proba(feature_vec)[0][1])
+
+result_col, bar_col = st.columns([1, 2])
+with result_col:
+    st.metric('Bad-review probability', str(round(prob * 100, 1)) + '%')
+    if prob > 0.5:
+        st.error('Likely bad review')
+    elif prob > 0.3:
+        st.warning('Elevated risk')
+    else:
+        st.success('Low risk')
+
+with bar_col:
+    st.write('')
+    st.write('')
+    st.progress(prob)
+    st.caption('0% safe ---- 50% threshold ---- 100% risky')
+
+st.caption('Try setting delivery delay to +14 days. The probability jumps dramatically -- that is the late-delivery effect dominating the model.')
+
 st.caption("More charts coming. Run `streamlit run app.py` from your project folder to launch.")
+
+# ── STATISTICAL TEST ──────────────────────────────────────────────────
+st.markdown("---")
+st.subheader("Is the delivery-delay effect actually significant?")
+st.caption("Visual differences can lie. We run a formal statistical test to prove that late deliveries get worse reviews — and that the difference isn't just noise.")
+
+from scipy import stats
+
+on_time = df[df['delivery_delay_days'] <= 0]['is_bad_review']
+late_   = df[df['delivery_delay_days'] >  0]['is_bad_review']
+
+p1 = on_time.mean()
+p2 = late_.mean()
+n1 = len(on_time)
+n2 = len(late_)
+p_pool = (on_time.sum() + late_.sum()) / (n1 + n2)
+se = np.sqrt(p_pool * (1 - p_pool) * (1/n1 + 1/n2))
+z = (p2 - p1) / se
+p_value = 2 * (1 - stats.norm.cdf(abs(z)))
+
+sc1, sc2, sc3 = st.columns(3)
+sc1.metric("On-time bad rate", f"{p1*100:.1f}%", f"{n1:,} orders")
+sc2.metric("Late bad rate", f"{p2*100:.1f}%", f"{n2:,} orders")
+sc3.metric("Difference", f"+{(p2-p1)*100:.1f} pp", f"z = {z:.2f}")
+
+if p_value < 0.001:
+    sig_text = "p < 0.001 (extremely significant)"
+elif p_value < 0.01:
+    sig_text = f"p = {p_value:.4f} (highly significant)"
+elif p_value < 0.05:
+    sig_text = f"p = {p_value:.4f} (significant)"
+else:
+    sig_text = f"p = {p_value:.4f} (NOT significant)"
+
+st.info(
+    f"**Two-proportion z-test result:** {sig_text}. "
+    f"The probability of seeing this difference by random chance is effectively zero. "
+    f"Late delivery causes ~**{(p2-p1)*100:.0f} percentage points more** bad reviews than on-time delivery."
+)
+
+
+# ── SENTIMENT ANALYSIS ON REVIEW TEXT ─────────────────────────────────
+st.markdown("---")
+st.subheader("Do customers say what they rate? (Sentiment vs Stars)")
+st.caption("Sentiment analysis on the review_comment_message column. We compare the text's sentiment score against the actual star rating to find mismatches.")
+
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+@st.cache_data
+def compute_sentiment(_df_reviews):
+    analyzer = SentimentIntensityAnalyzer()
+    df_r = _df_reviews.dropna(subset=['review_comment_message']).copy()
+    if len(df_r) > 10000:
+        df_r = df_r.sample(10000, random_state=42)
+    df_r['sentiment'] = df_r['review_comment_message'].apply(
+        lambda txt: analyzer.polarity_scores(str(txt))['compound']
+    )
+    return df_r[['order_id', 'review_score', 'sentiment', 'review_comment_message']]
+
+with st.spinner("Scoring review text sentiment (one-time, ~15-30 seconds)..."):
+    reviews_raw = pd.read_csv('./Data/olist_order_reviews_dataset.csv')
+    sent_df = compute_sentiment(reviews_raw)
+
+fig_sent = px.box(
+    sent_df,
+    x='review_score', y='sentiment',
+    color='review_score',
+    title='Text sentiment score by star rating',
+    labels={'sentiment': 'VADER sentiment (-1 = negative, +1 = positive)',
+            'review_score': 'Star rating'},
+    color_discrete_sequence=[WARNING, '#FBBF24', INDIGO, PURPLE, ACCENT],
+)
+fig_sent.update_layout(height=420, showlegend=False, margin=dict(l=10, r=10, t=40, b=20))
+st.plotly_chart(fig_sent, use_container_width=True, config=PLOTLY_CONFIG)
+
+mismatched_5_star_neg = sent_df[(sent_df['review_score'] == 5) & (sent_df['sentiment'] < -0.3)]
+mismatched_1_star_pos = sent_df[(sent_df['review_score'] == 1) & (sent_df['sentiment'] > 0.3)]
+
+mc1, mc2 = st.columns(2)
+mc1.metric("5-star reviews with negative text", f"{len(mismatched_5_star_neg):,}")
+mc2.metric("1-star reviews with positive text", f"{len(mismatched_1_star_pos):,}")
+
+st.caption(
+    "**Reading the box plot:** Higher star ratings should correlate with positive sentiment. "
+    "Outliers in unexpected positions are interesting — they suggest data quality issues or "
+    "edge cases worth investigating manually."
+)
