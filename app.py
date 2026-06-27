@@ -334,7 +334,7 @@ else:
     st.plotly_chart(fig4, use_container_width=True)
     # ── CHART 5: PREDICTIVE MODEL ─────────────────────────────────────────
 st.subheader("What actually predicts a bad review?")
-st.caption("A random forest trained on order features (delivery, price, category, seller location). "
+st.caption("A LightGBM gradient boosting model trained on order features (delivery, price, category, seller location). "
            "The bar chart shows which features the model relies on most. AUC scores tell you how well "
            "the model separates good from bad reviews — above 0.7 is real signal, above 0.8 is strong.")
 
@@ -367,7 +367,7 @@ def train_model(df_in):
     )
 
     model = LGBMClassifier(
-        n_estimators=300,
+        n_estimators=150,
         max_depth=8,
         learning_rate=0.05,
         n_jobs=-1,
@@ -582,8 +582,8 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 def compute_sentiment(_df_reviews):
     analyzer = SentimentIntensityAnalyzer()
     df_r = _df_reviews.dropna(subset=['review_comment_message']).copy()
-    if len(df_r) > 10000:
-        df_r = df_r.sample(10000, random_state=42)
+    if len(df_r) > 5000:
+        df_r = df_r.sample(5000, random_state=42)
     df_r['sentiment'] = df_r['review_comment_message'].apply(
         lambda txt: analyzer.polarity_scores(str(txt))['compound']
     )
