@@ -10,17 +10,17 @@ st.set_page_config(
     layout="wide",
 )
 
-# Plotly UI config — hides the hover toolbar on every chart
+# Plotly UI config: hides the hover toolbar on every chart
 PLOTLY_CONFIG = {'displayModeBar': False}
 
 import plotly.io as pio
 
 # ── BRAND PALETTE ─────────────────────────────────────────────────────
-ACCENT   = "#2DD4BF"   # teal — primary, "good"
+ACCENT   = "#2DD4BF"   # teal, primary, "good"
 INDIGO   = "#818CF8"   # intermediate
 PURPLE   = "#A78BFA"   # accent variation
-WARNING  = "#FB7185"   # rose — "bad" outcomes
-SUCCESS  = "#34D399"   # green — improvement
+WARNING  = "#FB7185"   # rose, "bad" outcomes
+SUCCESS  = "#34D399"   # green, improvement
 TEXT_DIM = "#9CA3AF"
 
 # Continuous scales (use for color gradients)
@@ -336,7 +336,7 @@ else:
 st.subheader("What actually predicts a bad review?")
 st.caption("A LightGBM gradient boosting model trained on order features (delivery, price, category, seller location). "
            "The bar chart shows which features the model relies on most. AUC scores tell you how well "
-           "the model separates good from bad reviews — above 0.7 is real signal, above 0.8 is strong.")
+           "the model separates good from bad reviews: above 0.7 is real signal, above 0.8 is strong.")
 
 from lightgbm import LGBMClassifier
 from sklearn.model_selection import train_test_split
@@ -411,10 +411,10 @@ fig5.update_layout(
 )
 st.plotly_chart(fig5, use_container_width=True)
 
-st.info("**Reading this:** Delivery delay dominates the feature importance — same story Chart 1 told visually, "
+st.info("**Reading this:** Delivery delay dominates the feature importance, same story Chart 1 told visually, "
         "now backed by a model. Price and freight modestly matter. Category and state contribute small "
         "individual signal but add up in aggregate. If train AUC is much higher than test AUC, the model "
-        "is overfitting — current settings should keep them close.")
+        "is overfitting: current settings should keep them close.")
 
 st.markdown("---")
 
@@ -534,7 +534,7 @@ st.caption("More charts coming. Run `streamlit run app.py` from your project fol
 # ── STATISTICAL TEST ──────────────────────────────────────────────────
 st.markdown("---")
 st.subheader("Is the delivery-delay effect actually significant?")
-st.caption("Visual differences can lie. We run a formal statistical test to prove that late deliveries get worse reviews — and that the difference isn't just noise.")
+st.caption("Visual differences can lie. We run a formal statistical test to prove that late deliveries get worse reviews, and that the difference isn't just noise.")
 
 from scipy import stats
 
@@ -614,6 +614,6 @@ mc2.metric("1-star reviews with positive text", f"{len(mismatched_1_star_pos):,}
 
 st.caption(
     "**Reading the box plot:** Higher star ratings should correlate with positive sentiment. "
-    "Outliers in unexpected positions are interesting — they suggest data quality issues or "
+    "Outliers in unexpected positions are interesting: they suggest data quality issues or "
     "edge cases worth investigating manually."
 )
